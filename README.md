@@ -38,6 +38,11 @@ By automating the extraction process, it saves significant time and effort compa
 
 ## Installation
 
+### Prerequisites
+
+- Python 3.10+ is required to run the scripts.
+- If you do not have Python installed, install it from https://www.python.org/downloads/ or use Miniconda/Conda.
+
 1. Clone this repository:
    ```
    git clone https://github.com/serhanylmz/mcq.git
@@ -67,6 +72,7 @@ python pdf_parser.py -d /path/to/pdf/directory -l language
 
 - `-d` or `--dir`: Directory containing the PDF files (default is "pdfs")
 - `-l` or `--lang`: Language of the questions (default is "swedish")
+- `-m` or `--input-mode`: Choose how pages are processed: `auto` uses OCR text when available, otherwise vision; `vision` forces images; `text` forces extracted text (default is "auto")
 
 or if you have specified the default language and directory: 
 ```
