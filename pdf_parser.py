@@ -55,7 +55,7 @@ def parse_gpt_output(response):
 
     return parsed_data
 
-pre_prompt = """Extract the multiple-choice questions from the attached image, maintaining the Swedish language in which they appear. Follow these guidelines:
+pre_prompt = """Extract the multiple-choice questions from the provided content, maintaining the {language} language in which they appear. Follow these guidelines:
 
 1. Enclose the question number within `<question_number></question_number>` tags.
 2. Enclose the full question text within `<question></question>` tags.
@@ -70,7 +70,7 @@ Special Cases:
 
 Output Format:
 <question_number>Question number</question_number>
-<question>Full question text in Swedish</question>
+<question>Full question text in {language}</question>
 <choices>
 Choice 1
 Choice 2
@@ -81,6 +81,30 @@ Choice 3
 
 ALWAYS DOUBLE CHECK YOUR RESPONSE FOR THE SPECIAL CASES. NO ANSWER, DOUBLE ANSWERS, QUESTIONS WITH IMAGES. YOU MUST PAY INCREDIBLE ATTENTION TO YOUR RESPONSES, AND YOU WILL BE REWARDED.
 """
+
+def build_prompt(language):
+    return pre_prompt.format(language=language)
+
+def build_text_message(language, page_text):
+    prompt = build_prompt(language)
+    return [
+        {
+            "type": "text",
+            "text": f"{prompt}\n\nContent:\n{page_text}",
+        }
+    ]
+
+def build_image_message(language, base64_image):
+    prompt = build_prompt(language)
+    return [
+        {"type": "text", "text": prompt},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{base64_image}"
+            },
+        },
+    ]
 
 def chat_completion(
     client, messages, model, return_text=True, return_usage=True, model_args=None
@@ -134,7 +158,7 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
-def process_pdf(pdf_file, dir_path, client, language):
+def process_pdf(pdf_file, dir_path, client, language, input_mode, text_threshold=50):
     """
     Process a single PDF file
     """
@@ -148,25 +172,25 @@ def process_pdf(pdf_file, dir_path, client, language):
 
     for i, page in enumerate(pdf_document):
         print(f"Page: {i+1} / {len(pdf_document)}")
-        
-        # Convert page to image
-        pix = page.get_pixmap()
-        img_name = os.path.join(imgs_folder, f"{pdf_file}_{i+1}.png")
-        pix.save(img_name)
 
-        base64_image = encode_image(img_name)
+        page_text = page.get_text("text").strip()
+        use_text = input_mode == "text" or (
+            input_mode == "auto" and len(page_text) >= text_threshold
+        )
+        img_name = None
 
-        # Pass img to gpt-4 for mcq extraction
+        if use_text:
+            message = build_text_message(language, page_text)
+        else:
+            # Convert page to image
+            pix = page.get_pixmap()
+            img_name = os.path.join(imgs_folder, f"{pdf_file}_{i+1}.png")
+            pix.save(img_name)
+            base64_image = encode_image(img_name)
+            message = build_image_message(language, base64_image)
+
+        # Pass content to gpt-4 for mcq extraction
         try:
-            message = [
-                {"type": "text", "text": pre_prompt.format(language)},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{base64_image}"
-                    },
-                },
-            ]
             response, _ = chat_completion(
                 client,
                 [{"role": "user", "content": message}],
@@ -206,14 +230,15 @@ def process_pdf(pdf_file, dir_path, client, language):
             print(f"Error processing page {i+1}")
 
         # Remove the temporary image file
-        os.remove(img_name)
+        if img_name and os.path.exists(img_name):
+            os.remove(img_name)
 
     # Close the PDF document
     pdf_document.close()
 
     return results
 
-def main(dir_path, language):
+def main(dir_path, language, input_mode):
     """
     It performs the main text extraction pipeline of the script.
 
@@ -236,7 +261,7 @@ def main(dir_path, language):
     os.makedirs(mcq_folder, exist_ok=True)
 
     for pdf_file in pdf_files:
-        results = process_pdf(pdf_file, dir_path, client, language)
+        results = process_pdf(pdf_file, dir_path, client, language, input_mode)
 
         # store extracted questions
         output_file = os.path.join(mcq_folder, f"{pdf_file.split('.')[0]}.json")
@@ -251,5 +276,13 @@ if __name__ == "__main__":
 
     parser.add_argument("-l", "--lang", help="", default="swedish")
 
+    parser.add_argument(
+        "-m",
+        "--input-mode",
+        choices=["auto", "vision", "text"],
+        default="auto",
+        help="auto uses OCR text when available, otherwise vision; vision forces images; text forces extracted text.",
+    )
+
     args = parser.parse_args()
-    main(dir_path=args.dir, language=args.lang)
+    main(dir_path=args.dir, language=args.lang, input_mode=args.input_mode)
